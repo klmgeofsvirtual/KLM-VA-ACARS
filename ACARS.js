@@ -35,53 +35,70 @@
         let oldAGL = 0;
         let oldTime = Date.now();
 
-        // HIGH FREQUENCY LOOP (50ms) - For Landings/Taxi
-        setInterval(() => {
-            if (!window.geofs || !geofs.animation) return;
-            const vals = geofs.animation.values;
-            const now = Date.now();
-            
-            // Terrain-calibrated AGL
-            const currentAGL = (vals.altitude - vals.groundElevationFeet) + (geofs.aircraft.instance.collisionPoints[geofs.aircraft.instance.collisionPoints.length - 2].worldPosition[2] * 3.2808);
-            const calVS = (currentAGL - oldAGL) * (60000 / (now - oldTime));
-            oldAGL = currentAGL;
-            oldTime = now;
+        // Internal function to handle breach logging
+        const logBreach = (type, details) => {
+            const currentTime = Date.now();
+            if (currentTime - lastBreachTime < 15000) return; // 15s cooldown
+            lastBreachTime = currentTime;
 
-            // TAXI CHECK
-            if (vals.groundContact && vals.groundSpeedKnt > 26) {
-                logBreach("TAXI_OVERSPEED", `${Math.round(vals.groundSpeedKnt)}kts on ground`);
-            }
-
-            // LANDING CHECK
-            if (vals.groundContact && !isGrounded) {
-                const finalVS = Math.abs(calVS);
-                const gForce = vals.accZ / 9.80665;
-                if (finalVS > 600 || gForce > 2.5) {
-                    logBreach("GASA_INCIDENT", `Hard Landing: ${Math.round(finalVS)}fpm @ ${gForce.toFixed(2)}G`);
-                }
-                db.collection('bookings').doc(docId).update({ landingVS: Math.round(finalVS), landingG: gForce.toFixed(2) });
-            }
-
-            // OVERSPEED CHECK
-            if (!vals.groundContact && currentAGL < 3000 && vals.kias > 250) {
-                logBreach("OVERSPEED", `${Math.round(vals.kias)}kts @ ${Math.round(currentAGL)}ft`);
-            }
-
-            isGrounded = vals.groundContact;
-            document.getElementById('telemetry').innerText = `SPD: ${Math.round(vals.kias)} | AGL: ${Math.round(currentAGL)}`;
-        }, 50);
-
-        function logBreach(type, details) {
-            if (now - lastBreachTime < 10000) return;
-            lastBreachTime = now;
             db.collection('breaches').add({
                 pilotId: pilotId,
                 type: type,
                 details: details || "No extra info",
                 flight: flight.flightNumber || "KLM-UNKN",
                 timestamp: firebase.firestore.FieldValue.serverTimestamp()
-            });
-        }
+            }).then(() => console.log("Breach Logged:", type));
+            
+            if (window.geofs && geofs.notifications) geofs.notifications.show("SOP BREACH: " + type, "red");
+        };
+
+        // HIGH FREQUENCY LOOP (50ms)
+        setInterval(() => {
+            if (!window.geofs || !geofs.animation || !geofs.aircraft.instance) return;
+            const vals = geofs.animation.values;
+            const now = Date.now();
+            
+            // Terrain-calibrated AGL
+            const collisionPointOffset = (geofs.aircraft.instance.collisionPoints && geofs.aircraft.instance.collisionPoints.length > 1) 
+                ? geofs.aircraft.instance.collisionPoints[geofs.aircraft.instance.collisionPoints.length - 2].worldPosition[2] * 3.2808 
+                : 0;
+
+            const currentAGL = (vals.altitude - vals.groundElevationFeet) + collisionPointOffset;
+            
+            // Calculate Vertical Speed
+            const deltaT = now - oldTime;
+            const calVS = deltaT > 0 ? (currentAGL - oldAGL) * (60000 / deltaT) : 0;
+            
+            oldAGL = currentAGL;
+            oldTime = now;
+
+            // 1. TAXI CHECK
+            if (vals.groundContact && vals.groundSpeedKnt > 26) {
+                logBreach("TAXI_OVERSPEED", `${Math.round(vals.groundSpeedKnt)}kts on ground`);
+            }
+
+            // 2. LANDING CHECK
+            if (vals.groundContact && !isGrounded) {
+                const finalVS = Math.abs(calVS);
+                const gForce = vals.accZ / 9.80665;
+                if (finalVS > 600 || gForce > 2.5) {
+                    logBreach("GASA_INCIDENT", `Hard Landing: ${Math.round(finalVS)}fpm @ ${gForce.toFixed(2)}G`);
+                }
+                db.collection('bookings').doc(docId).update({ 
+                    landingVS: Math.round(finalVS), 
+                    landingG: gForce.toFixed(2) 
+                });
+            }
+
+            // 3. OVERSPEED CHECK
+            if (!vals.groundContact && currentAGL < 3000 && vals.kias > 250) {
+                logBreach("OVERSPEED", `${Math.round(vals.kias)}kts @ ${Math.round(currentAGL)}ft`);
+            }
+
+            isGrounded = vals.groundContact;
+            const tel = document.getElementById('telemetry');
+            if (tel) tel.innerText = `SPD: ${Math.round(vals.kias)} | AGL: ${Math.round(currentAGL)}`;
+        }, 50);
     }
     init();
 })();
