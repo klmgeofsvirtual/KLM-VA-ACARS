@@ -37,9 +37,9 @@
 
         // Internal function to handle breach logging
         const logBreach = (type, details) => {
-            const currentTime = Date.now();
-            if (currentTime - lastBreachTime < 15000) return; // 15s cooldown
-            lastBreachTime = currentTime;
+            const loopTime = Date.now(); 
+            if (loopTime - lastBreachTime < 15000) return; 
+            lastBreachTime = loopTime;
 
             db.collection('breaches').add({
                 pilotId: pilotId,
@@ -52,25 +52,21 @@
             if (window.geofs && geofs.notifications) geofs.notifications.show("SOP BREACH: " + type, "red");
         };
 
-        // HIGH FREQUENCY LOOP (50ms)
         setInterval(() => {
             if (!window.geofs || !geofs.animation || !geofs.aircraft.instance) return;
             const vals = geofs.animation.values;
-            const now = Date.now();
+            const loopNow = Date.now();
             
-            // Terrain-calibrated AGL
             const collisionPointOffset = (geofs.aircraft.instance.collisionPoints && geofs.aircraft.instance.collisionPoints.length > 1) 
                 ? geofs.aircraft.instance.collisionPoints[geofs.aircraft.instance.collisionPoints.length - 2].worldPosition[2] * 3.2808 
                 : 0;
 
             const currentAGL = (vals.altitude - vals.groundElevationFeet) + collisionPointOffset;
-            
-            // Calculate Vertical Speed
-            const deltaT = now - oldTime;
+            const deltaT = loopNow - oldTime;
             const calVS = deltaT > 0 ? (currentAGL - oldAGL) * (60000 / deltaT) : 0;
             
             oldAGL = currentAGL;
-            oldTime = now;
+            oldTime = loopNow;
 
             // 1. TAXI CHECK
             if (vals.groundContact && vals.groundSpeedKnt > 26) {
